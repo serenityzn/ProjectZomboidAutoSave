@@ -27,22 +27,9 @@ builds:
     ldflags: [-s -w]
     flags: [-trimpath]
 
-  - id: windows
-    binary: ZomboidAutoBackup
-    goos: [windows]
-    goarch: [amd64]
-    env:
-      - CGO_ENABLED=1
-      - CC=gcc
-    ldflags: [-s -w -H=windowsgui]
-    flags: [-trimpath]
-
 archives:
   - id: default
     format: tar.gz
-    format_overrides:
-      - goos: windows
-        format: zip
     name_template: "{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
     files:
       - README.md
