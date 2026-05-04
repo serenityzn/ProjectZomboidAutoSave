@@ -34,7 +34,7 @@ func Restore(backupPath, zomboidFolder, backupFolder string, backupFirst bool) {
 			beforeDir := filepath.Join(backupFolder, "before-restore")
 			if err := os.MkdirAll(beforeDir, 0o755); err == nil {
 				ts := time.Now().Format("2006-01-02_15-04-05")
-				snapPath := filepath.Join(beforeDir, fmt.Sprintf("snap-%s.tar.zst", ts))
+				snapPath := filepath.Join(beforeDir, fmt.Sprintf("r-%s.tar.zst", ts))
 				// Best-effort — don't abort the restore if this fails
 				tarZst(savesDir, snapPath) //nolint:errcheck
 			}
@@ -92,7 +92,8 @@ func run(zomboidFolder, backupFolder, subdir string, maxBackups int, notifySucce
 	}
 
 	timestamp := time.Now().Format("2006-01-02_15-04-05")
-	snapName := fmt.Sprintf("snap-%s.tar.zst", timestamp)
+	prefix := string([]rune(subdir)[0]) // "m" for manual, "a" for auto
+	snapName := fmt.Sprintf("%s-%s.tar.zst", prefix, timestamp)
 	snapPath := filepath.Join(destDir, snapName)
 
 	if err := tarZst(savesDir, snapPath); err != nil {
