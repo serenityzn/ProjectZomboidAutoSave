@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/getlantern/systray"
+	"golang.design/x/hotkey"
 	"zomboidautobackup/internal/backup"
 	"zomboidautobackup/internal/config"
 	"zomboidautobackup/internal/dialog"
@@ -67,7 +68,7 @@ func (t *Tray) Setup(icon []byte) {
 		autoLabel = "Auto Backup: ON"
 	}
 	t.autoBackupItem = systray.AddMenuItemCheckbox(autoLabel, "Toggle automatic backups", t.cfg.AutoBackup)
-	manualItem := systray.AddMenuItem("Manual Backup", "Trigger a backup now")
+	manualItem := systray.AddMenuItem("Manual Backup  "+hotkeyLabel, "Trigger a backup now")
 
 	t.buildRestoreSubmenu()
 
@@ -77,6 +78,7 @@ func (t *Tray) Setup(icon []byte) {
 
 	go t.handleEvents(manualItem, quitItem)
 	go t.autoBackupLoop()
+	go t.hotkeyLoop()
 }
 
 func (t *Tray) buildSettingsSubmenu() {
@@ -389,6 +391,20 @@ func (t *Tray) changeZomboidFolder() {
 	t.cfg.ZomboidFolder = path
 	t.zomboidDisplay.SetTitle(fmt.Sprintf("Zomboid Folder: %s", path))
 	t.cfg.Save() //nolint:errcheck
+}
+
+func (t *Tray) hotkeyLoop() {
+	hk := hotkey.New(hotkeyModifiers, hotkey.KeyB)
+	if err := hk.Register(); err != nil {
+		return // silently skip if hotkey can't be registered (e.g. already taken)
+	}
+	defer hk.Unregister()
+	for range hk.Keydown() {
+		go func() {
+			backup.Manual(t.cfg.ZomboidFolder, t.cfg.BackupFolder, t.cfg.MaxBackupFiles)
+			t.refreshRestoreMenus()
+		}()
+	}
 }
 
 func (t *Tray) autoBackupLoop() {
