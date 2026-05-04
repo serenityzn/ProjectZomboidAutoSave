@@ -5,11 +5,11 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"time"
 
 	"github.com/klauspost/compress/zstd"
+	"zomboidautobackup/internal/dialog"
 )
 
 // Manual triggers a one-off backup into {backupFolder}/manual/.
@@ -241,14 +241,9 @@ func untarZst(archivePath, destDir string) error {
 }
 
 func showDialog(message string) {
-	script := fmt.Sprintf(
-		`display dialog %q buttons {"OK"} default button "OK" with icon stop`,
-		message,
-	)
-	exec.Command("osascript", "-e", script).Run() //nolint:errcheck
+	dialog.Alert(message)
 }
 
 func showNotification(title, message string) {
-	script := fmt.Sprintf(`display notification %q with title %q`, message, title)
-	exec.Command("osascript", "-e", script).Run() //nolint:errcheck
+	dialog.Notify(title, message)
 }

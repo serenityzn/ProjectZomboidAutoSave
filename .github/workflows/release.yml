@@ -9,13 +9,13 @@ permissions:
   contents: write
 
 jobs:
-  release:
+  release-darwin:
     runs-on: self-hosted
     steps:
       - name: Checkout
         uses: actions/checkout@v4
         with:
-          fetch-depth: 0  # GoReleaser needs full history for changelog
+          fetch-depth: 0
 
       - name: Set up Go
         uses: actions/setup-go@v5
@@ -23,10 +23,76 @@ jobs:
           go-version-file: go.mod
           cache: true
 
-      - name: Run GoReleaser
+      - name: Build macOS artifacts
         uses: goreleaser/goreleaser-action@v6
         with:
           version: latest
-          args: release --clean
+          args: release --split --clean
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GORELEASER_CURRENT_TAG: ${{ github.ref_name }}
+
+      - name: Upload macOS dist
+        uses: actions/upload-artifact@v4
+        with:
+          name: dist-darwin
+          path: dist/
+
+  release-windows:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Build Windows artifacts
+        uses: goreleaser/goreleaser-action@v6
+        with:
+          version: latest
+          args: release --split --clean
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GORELEASER_CURRENT_TAG: ${{ github.ref_name }}
+
+      - name: Upload Windows dist
+        uses: actions/upload-artifact@v4
+        with:
+          name: dist-windows
+          path: dist/
+
+  merge:
+    needs: [release-darwin, release-windows]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Download macOS dist
+        uses: actions/download-artifact@v4
+        with:
+          name: dist-darwin
+          path: dist/
+
+      - name: Download Windows dist
+        uses: actions/download-artifact@v4
+        with:
+          name: dist-windows
+          path: dist/
+
+      - name: Merge and publish release
+        uses: goreleaser/goreleaser-action@v6
+        with:
+          version: latest
+          args: continue --merge
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GORELEASER_CURRENT_TAG: ${{ github.ref_name }}
