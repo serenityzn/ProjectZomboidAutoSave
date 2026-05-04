@@ -8,7 +8,7 @@ A lightweight **macOS and Windows** system tray app for automatically and manual
 
 - **System tray app** — lives in your menu bar / taskbar, no windows, no clutter
 - **Auto backup** — backs up your saves on a configurable schedule
-- **Manual backup** — trigger a backup instantly with one click
+- **Manual backup** — trigger a backup instantly with one click or global hotkey (`⌘⇧B` / `Ctrl+Shift+B`)
 - **Restore** — restore any previous backup directly from the menu
 - **Safety backup before restore** — automatically preserves your current saves before any restore
 - **Efficient compression** — archives use `.tar.zst` (Zstandard), faster and smaller than zip or gzip
@@ -30,7 +30,7 @@ ZB (tray icon)
 │   └── Max Backups: 10       ▶  (5 / 10 / 15 presets + custom, max 20)
 ├── ─────────────────────────────
 ├── Auto Backup: OFF           (click to toggle)
-├── Manual Backup              (click to backup now)
+├── Manual Backup  ⌘⇧B        (click or hotkey to backup now)
 ├── Restore
 │   ├── ✓ Backup before restore
 │   ├── Manual ▶  [list of manual snapshots, newest first]
@@ -48,13 +48,13 @@ All backups are stored inside your configured **Backup Folder** (default `~/Zomb
 ~/ZomboidAutoBackup/
 ├── .state               ← saved settings (JSON)
 ├── manual/
-│   ├── snap-2026-05-04_11-00-00.tar.zst
-│   └── snap-2026-05-04_10-30-00.tar.zst
+│   ├── m-2026-05-04_11-00-00.tar.zst
+│   └── m-2026-05-04_10-30-00.tar.zst
 ├── auto/
-│   ├── snap-2026-05-04_11-15-00.tar.zst
+│   ├── a-2026-05-04_11-15-00.tar.zst
 │   └── ...
 └── before-restore/
-    └── snap-2026-05-04_11-20-00.tar.zst   ← safety backup created before each restore
+    └── r-2026-05-04_11-20-00.tar.zst   ← safety backup created before each restore
 ```
 
 Each snapshot contains the full `Saves/` directory tree from your Zomboid folder.
@@ -127,6 +127,7 @@ GOOS=windows GOARCH=amd64 CGO_ENABLED=1 CC=x86_64-w64-mingw32-gcc \
 | [`github.com/getlantern/systray`](https://github.com/getlantern/systray) | Cross-platform system tray |
 | [`github.com/klauspost/compress`](https://github.com/klauspost/compress) | Zstandard (zstd) compression |
 | [`github.com/ncruces/zenity`](https://github.com/ncruces/zenity) | Native OS dialogs (folder picker, prompts) |
+| [`golang.design/x/hotkey`](https://pkg.go.dev/golang.design/x/hotkey) | Global hotkey registration |
 
 ---
 
