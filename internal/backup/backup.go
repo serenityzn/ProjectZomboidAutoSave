@@ -1,0 +1,254 @@
+package backup
+
+import (
+	"archive/tar"
+	"fmt"
+	"io"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"time"
+
+	"github.com/klauspost/compress/zstd"
+)
+
+// Manual triggers a one-off backup into {backupFolder}/manual/.
+func Manual(zomboidFolder, backupFolder string, maxBackups int) {
+	run(zomboidFolder, backupFolder, "manual", maxBackups, true)
+}
+
+// Auto triggers a scheduled backup into {backupFolder}/auto/.
+// Silent on success — no notification so it doesn't interrupt the user.
+func Auto(zomboidFolder, backupFolder string, maxBackups int) {
+	run(zomboidFolder, backupFolder, "auto", maxBackups, false)
+}
+
+// Restore unpacks backupPath into zomboidFolder/Saves.
+// If backupFirst is true, the current Saves folder is archived to
+// {backupFolder}/before-restore/ before anything is touched.
+func Restore(backupPath, zomboidFolder, backupFolder string, backupFirst bool) {
+	savesDir := filepath.Join(zomboidFolder, "Saves")
+
+	if backupFirst {
+		if _, err := os.Stat(savesDir); err == nil {
+			beforeDir := filepath.Join(backupFolder, "before-restore")
+			if err := os.MkdirAll(beforeDir, 0o755); err == nil {
+				ts := time.Now().Format("2006-01-02_15-04-05")
+				snapPath := filepath.Join(beforeDir, fmt.Sprintf("snap-%s.tar.zst", ts))
+				// Best-effort — don't abort the restore if this fails
+				tarZst(savesDir, snapPath) //nolint:errcheck
+			}
+		}
+	}
+
+	// Remove existing Saves so the extracted tree replaces it cleanly
+	if err := os.RemoveAll(savesDir); err != nil {
+		showDialog(fmt.Sprintf("Could not remove existing Saves folder:\n%v", err))
+		return
+	}
+
+	if err := untarZst(backupPath, zomboidFolder); err != nil {
+		showDialog(fmt.Sprintf("Restore failed:\n%v", err))
+		return
+	}
+
+	showNotification("Zomboid Backup", "Restore completed successfully!")
+}
+
+// ListSnapshots returns snapshot file names in dir, newest first.
+func ListSnapshots(dir string) ([]string, error) {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return nil, err
+	}
+	var snaps []string
+	for _, e := range entries {
+		if !e.IsDir() && filepath.Ext(e.Name()) == ".zst" {
+			snaps = append(snaps, e.Name())
+		}
+	}
+	// Reverse: ReadDir is alphabetical (oldest first), we want newest first
+	for i, j := 0, len(snaps)-1; i < j; i, j = i+1, j-1 {
+		snaps[i], snaps[j] = snaps[j], snaps[i]
+	}
+	return snaps, nil
+}
+
+// run is the shared implementation for both manual and auto backups.
+func run(zomboidFolder, backupFolder, subdir string, maxBackups int, notifySuccess bool) {
+	savesDir := filepath.Join(zomboidFolder, "Saves")
+
+	if _, err := os.Stat(savesDir); os.IsNotExist(err) {
+		if notifySuccess {
+			showDialog("No 'Saves' folder found in the configured Zomboid folder.\n\nPlease check your Zomboid Folder setting.")
+		}
+		return
+	}
+
+	destDir := filepath.Join(backupFolder, subdir)
+	if err := os.MkdirAll(destDir, 0o755); err != nil {
+		showDialog(fmt.Sprintf("Could not create backup folder:\n%v", err))
+		return
+	}
+
+	timestamp := time.Now().Format("2006-01-02_15-04-05")
+	snapName := fmt.Sprintf("snap-%s.tar.zst", timestamp)
+	snapPath := filepath.Join(destDir, snapName)
+
+	if err := tarZst(savesDir, snapPath); err != nil {
+		os.Remove(snapPath)
+		showDialog(fmt.Sprintf("Backup failed:\n%v", err))
+		return
+	}
+
+	if err := enforceLimit(destDir, maxBackups); err != nil {
+		showNotification("Zomboid Backup", fmt.Sprintf("Backup saved but rotation failed: %v", err))
+		return
+	}
+
+	if notifySuccess {
+		showNotification("Zomboid Backup", fmt.Sprintf("Manual backup saved: %s", snapName))
+	}
+}
+
+// enforceLimit deletes the oldest snapshots in dir until at most maxBackups remain.
+func enforceLimit(dir string, maxBackups int) error {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return err
+	}
+	var snaps []os.DirEntry
+	for _, e := range entries {
+		if !e.IsDir() && filepath.Ext(e.Name()) == ".zst" {
+			snaps = append(snaps, e)
+		}
+	}
+	for len(snaps) > maxBackups {
+		oldest := filepath.Join(dir, snaps[0].Name())
+		if err := os.Remove(oldest); err != nil {
+			return fmt.Errorf("removing %s: %w", snaps[0].Name(), err)
+		}
+		snaps = snaps[1:]
+	}
+	return nil
+}
+
+// tarZst archives sourceDir into a zstd-compressed tar at destPath.
+func tarZst(sourceDir, destPath string) error {
+	f, err := os.Create(destPath)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+
+	zw, err := zstd.NewWriter(f, zstd.WithEncoderLevel(zstd.SpeedBestCompression))
+	if err != nil {
+		return err
+	}
+	defer zw.Close()
+
+	tw := tar.NewWriter(zw)
+	defer tw.Close()
+
+	baseDir := filepath.Dir(sourceDir)
+
+	return filepath.Walk(sourceDir, func(path string, info os.FileInfo, err error) error {
+		if err != nil {
+			return err
+		}
+		relPath, err := filepath.Rel(baseDir, path)
+		if err != nil {
+			return err
+		}
+		header, err := tar.FileInfoHeader(info, "")
+		if err != nil {
+			return err
+		}
+		header.Name = relPath
+		if info.IsDir() {
+			header.Name += "/"
+		}
+		if err := tw.WriteHeader(header); err != nil {
+			return err
+		}
+		if info.IsDir() {
+			return nil
+		}
+		src, err := os.Open(path)
+		if err != nil {
+			return err
+		}
+		defer src.Close()
+		_, err = io.Copy(tw, src)
+		return err
+	})
+}
+
+// untarZst extracts a .tar.zst archive into destDir.
+func untarZst(archivePath, destDir string) error {
+	f, err := os.Open(archivePath)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+
+	zr, err := zstd.NewReader(f)
+	if err != nil {
+		return err
+	}
+	defer zr.Close()
+
+	tr := tar.NewReader(zr)
+	cleanDest := filepath.Clean(destDir)
+
+	for {
+		header, err := tr.Next()
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			return err
+		}
+
+		target := filepath.Join(destDir, header.Name)
+
+		// Guard against path traversal attacks
+		if len(target) < len(cleanDest) || target[:len(cleanDest)] != cleanDest {
+			continue
+		}
+
+		switch header.Typeflag {
+		case tar.TypeDir:
+			if err := os.MkdirAll(target, os.FileMode(header.Mode)); err != nil {
+				return err
+			}
+		case tar.TypeReg:
+			if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
+				return err
+			}
+			out, err := os.OpenFile(target, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, os.FileMode(header.Mode))
+			if err != nil {
+				return err
+			}
+			_, copyErr := io.Copy(out, tr)
+			out.Close()
+			if copyErr != nil {
+				return copyErr
+			}
+		}
+	}
+	return nil
+}
+
+func showDialog(message string) {
+	script := fmt.Sprintf(
+		`display dialog %q buttons {"OK"} default button "OK" with icon stop`,
+		message,
+	)
+	exec.Command("osascript", "-e", script).Run() //nolint:errcheck
+}
+
+func showNotification(title, message string) {
+	script := fmt.Sprintf(`display notification %q with title %q`, message, title)
+	exec.Command("osascript", "-e", script).Run() //nolint:errcheck
+}
