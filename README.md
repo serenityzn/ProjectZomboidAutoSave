@@ -1,12 +1,12 @@
 # 🧟 ZomboidAutoBackup
 
-A lightweight macOS menu bar app for automatically and manually backing up your **Project Zomboid** save files.
+A lightweight **macOS and Windows** system tray app for automatically and manually backing up your **Project Zomboid** save files.
 
 ---
 
 ## Features
 
-- **System tray app** — lives in your menu bar, no windows, no clutter
+- **System tray app** — lives in your menu bar / taskbar, no windows, no clutter
 - **Auto backup** — backs up your saves on a configurable schedule
 - **Manual backup** — trigger a backup instantly with one click
 - **Restore** — restore any previous backup directly from the menu
@@ -20,7 +20,7 @@ A lightweight macOS menu bar app for automatically and manually backing up your 
 ## Menu Structure
 
 ```
-ZB (menu bar)
+ZB (tray icon)
 ├── Settings
 │   ├── Zomboid Folder: ~/Zomboid
 │   ├── Change Zomboid Folder...
@@ -63,27 +63,47 @@ Each snapshot contains the full `Saves/` directory tree from your Zomboid folder
 
 ## Settings
 
-| Setting | Default | Description |
-|---|---|---|
-| Zomboid Folder | `~/Zomboid` | Path to your Project Zomboid data folder |
-| Backup Folder | `~/ZomboidAutoBackup` | Where backups are stored |
-| Backup Every | 15 min | Auto backup interval (1–1440 min) |
-| Max Backups | 10 | Max snapshots per folder (manual/auto independently, capped at 20) |
-| Backup before restore | ON | Archives current saves before any restore |
+| Setting | Default (macOS) | Default (Windows) | Description |
+|---|---|---|---|
+| Zomboid Folder | `~/Zomboid` | `%USERPROFILE%\Zomboid` | Path to your Project Zomboid data folder |
+| Backup Folder | `~/ZomboidAutoBackup` | `%USERPROFILE%\ZomboidAutoBackup` | Where backups are stored |
+| Backup Every | 15 min | 15 min | Auto backup interval (1–1440 min) |
+| Max Backups | 10 | 10 | Max snapshots per folder (manual/auto independently, capped at 20) |
+| Backup before restore | ON | ON | Archives current saves before any restore |
 
-Settings are persisted to `~/ZomboidAutoBackup/.state` and loaded on every launch.
+Settings are persisted to `<BackupFolder>/.state` and loaded on every launch.
 
 ---
 
 ## Requirements
 
-- macOS 10.13+
-- [Go 1.21+](https://go.dev/dl/) (to build from source)
+| | macOS | Windows |
+|---|---|---|
+| OS | macOS 10.13+ | Windows 10+ |
+| Build from source | [Go 1.21+](https://go.dev/dl/) + Xcode CLT | [Go 1.21+](https://go.dev/dl/) + GCC (MinGW-w64) |
 
 ---
 
-## Build & Run
+## Installation
 
+**macOS** — extract and run:
+```bash
+tar xzf ZomboidAutoBackup_*_darwin_*.tar.gz
+./ZomboidAutoBackup
+```
+If macOS blocks it on first launch: right-click → Open, or run:
+```bash
+xattr -cr ZomboidAutoBackup
+```
+To run at login: **System Settings → General → Login Items** → add the binary.
+
+**Windows** — extract the `.zip` and run `ZomboidAutoBackup.exe`.
+
+---
+
+## Build from Source
+
+**macOS:**
 ```bash
 git clone https://github.com/serenityzn/ProjectZomboidAutoSave.git
 cd ProjectZomboidAutoSave
@@ -91,7 +111,12 @@ go build -o ZomboidAutoBackup .
 ./ZomboidAutoBackup
 ```
 
-To run at login, add the built binary to **System Settings → General → Login Items**.
+**Windows (cross-compile from macOS):**
+```bash
+brew install mingw-w64
+GOOS=windows GOARCH=amd64 CGO_ENABLED=1 CC=x86_64-w64-mingw32-gcc \
+  go build -ldflags "-H=windowsgui" -o ZomboidAutoBackup.exe .
+```
 
 ---
 
@@ -99,8 +124,9 @@ To run at login, add the built binary to **System Settings → General → Login
 
 | Package | Purpose |
 |---|---|
-| [`github.com/getlantern/systray`](https://github.com/getlantern/systray) | macOS menu bar integration |
+| [`github.com/getlantern/systray`](https://github.com/getlantern/systray) | Cross-platform system tray |
 | [`github.com/klauspost/compress`](https://github.com/klauspost/compress) | Zstandard (zstd) compression |
+| [`github.com/ncruces/zenity`](https://github.com/ncruces/zenity) | Native OS dialogs (folder picker, prompts) |
 
 ---
 
