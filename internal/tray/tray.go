@@ -2,7 +2,6 @@ package tray
 
 import (
 	"fmt"
-	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -11,6 +10,7 @@ import (
 	"github.com/getlantern/systray"
 	"zomboidautobackup/internal/backup"
 	"zomboidautobackup/internal/config"
+	"zomboidautobackup/internal/dialog"
 )
 
 var intervalPresets = []int{5, 10, 15, 20, 25, 30, 35, 40, 45, 50, 55, 60}
@@ -55,7 +55,7 @@ func New() *Tray {
 }
 
 func (t *Tray) Setup(icon []byte) {
-	systray.SetIcon(icon)
+	setIcon(icon)
 	systray.SetTooltip("Project Zomboid Auto Backup")
 
 	t.buildSettingsSubmenu()
@@ -264,7 +264,7 @@ func (t *Tray) handleEvents(manualItem, quitItem *systray.MenuItem) {
 }
 
 func (t *Tray) doRestore(subdir, snapName string) {
-	confirmed := osascriptConfirm(fmt.Sprintf(
+	confirmed := confirm(fmt.Sprintf(
 		"Restore \"%s\"?\n\nThis will replace your current Saves folder.", snapName))
 	if !confirmed {
 		return
@@ -309,7 +309,7 @@ func (t *Tray) selectInterval(idx int) {
 }
 
 func (t *Tray) promptInterval() {
-	result, ok := osascriptPrompt("Backup interval (minutes, 1–1440):", strconv.Itoa(t.cfg.BackupInterval))
+	result, ok := prompt("Backup interval (minutes, 1–1440):", strconv.Itoa(t.cfg.BackupInterval))
 	if !ok {
 		return
 	}
@@ -345,7 +345,7 @@ func (t *Tray) selectMaxBackup(idx int) {
 }
 
 func (t *Tray) promptMaxBackups() {
-	result, ok := osascriptPrompt("Max number of backup files (1–20):", strconv.Itoa(t.cfg.MaxBackupFiles))
+	result, ok := prompt("Max number of backup files (1–20):", strconv.Itoa(t.cfg.MaxBackupFiles))
 	if !ok {
 		return
 	}
@@ -371,7 +371,7 @@ func (t *Tray) promptMaxBackups() {
 }
 
 func (t *Tray) changeBackupFolder() {
-	path, ok := osascriptChooseFolder("Select a folder to store backups:", t.cfg.BackupFolder)
+	path, ok := chooseFolder("Select a folder to store backups:", t.cfg.BackupFolder)
 	if !ok {
 		return
 	}
@@ -382,7 +382,7 @@ func (t *Tray) changeBackupFolder() {
 }
 
 func (t *Tray) changeZomboidFolder() {
-	path, ok := osascriptChooseFolder("Select your Zomboid game folder:", t.cfg.ZomboidFolder)
+	path, ok := chooseFolder("Select your Zomboid game folder:", t.cfg.ZomboidFolder)
 	if !ok {
 		return
 	}
@@ -410,42 +410,14 @@ func (t *Tray) autoBackupLoop() {
 	}
 }
 
-func osascriptChooseFolder(prompt, defaultPath string) (string, bool) {
-	script := fmt.Sprintf(
-		`POSIX path of (choose folder with prompt %q default location %q)`,
-		prompt, defaultPath,
-	)
-	out, err := exec.Command("osascript", "-e", script).Output()
-	if err != nil {
-		return "", false
-	}
-	return strings.TrimSpace(string(out)), true
+func chooseFolder(prompt, defaultPath string) (string, bool) {
+	return dialog.ChooseFolder(prompt, defaultPath)
 }
 
-func osascriptConfirm(message string) bool {
-	script := fmt.Sprintf(
-		`button returned of (display dialog %q buttons {"Cancel", "Restore"} default button "Cancel" with icon caution)`,
-		message,
-	)
-	out, err := exec.Command("osascript", "-e", script).Output()
-	if err != nil {
-		return false
-	}
-	return strings.TrimSpace(string(out)) == "Restore"
+func confirm(message string) bool {
+	return dialog.Confirm(message, "Restore")
 }
 
-func osascriptPrompt(message, defaultValue string) (string, bool) {
-	script := fmt.Sprintf(
-		`display dialog %q default answer %q buttons {"Cancel", "OK"} default button "OK"`,
-		message, defaultValue,
-	)
-	out, err := exec.Command("osascript", "-e", script).Output()
-	if err != nil {
-		return "", false
-	}
-	parts := strings.SplitN(string(out), "text returned:", 2)
-	if len(parts) < 2 {
-		return "", false
-	}
-	return strings.TrimSpace(parts[1]), true
+func prompt(message, defaultValue string) (string, bool) {
+	return dialog.Prompt(message, defaultValue)
 }

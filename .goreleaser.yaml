@@ -7,13 +7,10 @@ before:
     - go mod tidy
 
 builds:
-  - id: zomboid-backup
+  - id: darwin
     binary: ZomboidAutoBackup
-    goos:
-      - darwin
-    goarch:
-      - amd64
-      - arm64
+    goos: [darwin]
+    goarch: [amd64, arm64]
     overrides:
       - goos: darwin
         goarch: amd64
@@ -27,14 +24,25 @@ builds:
           - CC=clang
           - CGO_CFLAGS=-target arm64-apple-macos11
           - CGO_LDFLAGS=-target arm64-apple-macos11
-    ldflags:
-      - -s -w
-    flags:
-      - -trimpath
+    ldflags: [-s -w]
+    flags: [-trimpath]
+
+  - id: windows
+    binary: ZomboidAutoBackup
+    goos: [windows]
+    goarch: [amd64]
+    env:
+      - CGO_ENABLED=1
+      - CC=gcc
+    ldflags: [-s -w -H=windowsgui]
+    flags: [-trimpath]
 
 archives:
   - id: default
     format: tar.gz
+    format_overrides:
+      - goos: windows
+        format: zip
     name_template: "{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
     files:
       - README.md
