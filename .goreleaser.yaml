@@ -1,0 +1,55 @@
+version: 2
+
+project_name: ZomboidAutoBackup
+
+before:
+  hooks:
+    - go mod tidy
+
+builds:
+  - id: zomboid-backup
+    binary: ZomboidAutoBackup
+    goos:
+      - darwin
+    goarch:
+      - amd64
+      - arm64
+    overrides:
+      - goos: darwin
+        goarch: amd64
+        env:
+          - CGO_ENABLED=1
+          - CC=clang
+      - goos: darwin
+        goarch: arm64
+        env:
+          - CGO_ENABLED=1
+          - CC=clang
+          - CGO_CFLAGS=-target arm64-apple-macos11
+          - CGO_LDFLAGS=-target arm64-apple-macos11
+    ldflags:
+      - -s -w
+    flags:
+      - -trimpath
+
+archives:
+  - id: default
+    format: tar.gz
+    name_template: "{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+    files:
+      - README.md
+      - LICENSE
+
+checksum:
+  name_template: "checksums.txt"
+
+changelog:
+  sort: asc
+  use: github
+  filters:
+    exclude:
+      - "^docs:"
+      - "^test:"
+      - "^chore:"
+      - Merge pull request
+      - Merge branch
