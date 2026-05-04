@@ -54,8 +54,8 @@ func New() *Tray {
 	return &Tray{cfg: cfg}
 }
 
-func (t *Tray) Setup() {
-	systray.SetTitle("ZB")
+func (t *Tray) Setup(icon []byte) {
+	systray.SetIcon(icon)
 	systray.SetTooltip("Project Zomboid Auto Backup")
 
 	t.buildSettingsSubmenu()
