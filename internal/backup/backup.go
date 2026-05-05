@@ -6,6 +6,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/klauspost/compress/zstd"
@@ -211,11 +212,9 @@ func untarZst(archivePath, destDir string) error {
 			return err
 		}
 
-		target := filepath.Join(destDir, header.Name)
-
-		// Guard against path traversal attacks
-		if len(target) < len(cleanDest) || target[:len(cleanDest)] != cleanDest {
-			continue
+		target, err := safeExtractPath(cleanDest, header.Name)
+		if err != nil {
+			return err
 		}
 
 		switch header.Typeflag {
@@ -239,6 +238,18 @@ func untarZst(archivePath, destDir string) error {
 		}
 	}
 	return nil
+}
+
+func safeExtractPath(cleanDest, name string) (string, error) {
+	if filepath.IsAbs(name) {
+		return "", fmt.Errorf("archive contains absolute path %q", name)
+	}
+
+	target := filepath.Clean(filepath.Join(cleanDest, name))
+	if target != cleanDest && !strings.HasPrefix(target, cleanDest+string(os.PathSeparator)) {
+		return "", fmt.Errorf("archive path escapes destination: %q", name)
+	}
+	return target, nil
 }
 
 func showDialog(message string) {
