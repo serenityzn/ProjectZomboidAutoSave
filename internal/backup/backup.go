@@ -6,6 +6,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 
@@ -58,19 +59,21 @@ func Restore(backupPath, zomboidFolder, backupFolder string, backupFirst bool) {
 
 // ListSnapshots returns snapshot file names in dir, newest first.
 func ListSnapshots(dir string) ([]string, error) {
-	entries, err := os.ReadDir(dir)
+	files, err := readSnapshotFiles(dir)
 	if err != nil {
 		return nil, err
 	}
-	var snaps []string
-	for _, e := range entries {
-		if !e.IsDir() && filepath.Ext(e.Name()) == ".zst" {
-			snaps = append(snaps, e.Name())
+
+	sort.Slice(files, func(i, j int) bool {
+		if files[i].created.Equal(files[j].created) {
+			return files[i].name > files[j].name
 		}
-	}
-	// Reverse: ReadDir is alphabetical (oldest first), we want newest first
-	for i, j := 0, len(snaps)-1; i < j; i, j = i+1, j-1 {
-		snaps[i], snaps[j] = snaps[j], snaps[i]
+		return files[i].created.After(files[j].created)
+	})
+
+	snaps := make([]string, 0, len(files))
+	for _, file := range files {
+		snaps = append(snaps, file.name)
 	}
 	return snaps, nil
 }
@@ -115,24 +118,68 @@ func run(zomboidFolder, backupFolder, subdir string, maxBackups int, notifySucce
 
 // enforceLimit deletes the oldest snapshots in dir until at most maxBackups remain.
 func enforceLimit(dir string, maxBackups int) error {
-	entries, err := os.ReadDir(dir)
+	snaps, err := readSnapshotFiles(dir)
 	if err != nil {
 		return err
 	}
-	var snaps []os.DirEntry
-	for _, e := range entries {
-		if !e.IsDir() && filepath.Ext(e.Name()) == ".zst" {
-			snaps = append(snaps, e)
+
+	sort.Slice(snaps, func(i, j int) bool {
+		if snaps[i].created.Equal(snaps[j].created) {
+			return snaps[i].name < snaps[j].name
 		}
-	}
+		return snaps[i].created.Before(snaps[j].created)
+	})
+
 	for len(snaps) > maxBackups {
-		oldest := filepath.Join(dir, snaps[0].Name())
+		oldest := filepath.Join(dir, snaps[0].name)
 		if err := os.Remove(oldest); err != nil {
-			return fmt.Errorf("removing %s: %w", snaps[0].Name(), err)
+			return fmt.Errorf("removing %s: %w", snaps[0].name, err)
 		}
 		snaps = snaps[1:]
 	}
 	return nil
+}
+
+type snapshotFile struct {
+	name    string
+	created time.Time
+}
+
+func readSnapshotFiles(dir string) ([]snapshotFile, error) {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return nil, err
+	}
+	var snaps []snapshotFile
+	for _, e := range entries {
+		if !e.IsDir() && filepath.Ext(e.Name()) == ".zst" {
+			info, err := e.Info()
+			if err != nil {
+				return nil, err
+			}
+			snaps = append(snaps, snapshotFile{
+				name:    e.Name(),
+				created: snapshotCreatedAt(e.Name(), info.ModTime()),
+			})
+		}
+	}
+	return snaps, nil
+}
+
+func snapshotCreatedAt(name string, fallback time.Time) time.Time {
+	const layout = "2006-01-02_15-04-05"
+
+	base := strings.TrimSuffix(name, ".tar.zst")
+	if len(base) < len(layout) {
+		return fallback
+	}
+
+	ts := base[len(base)-len(layout):]
+	created, err := time.ParseInLocation(layout, ts, time.Local)
+	if err != nil {
+		return fallback
+	}
+	return created
 }
 
 // tarZst archives sourceDir into a zstd-compressed tar at destPath.
