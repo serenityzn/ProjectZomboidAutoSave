@@ -2,54 +2,98 @@ package backup
 
 import (
 	"archive/tar"
+	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/klauspost/compress/zstd"
 	"zomboidautobackup/internal/dialog"
 )
 
+// mu serializes backups and restores so they never touch the same files concurrently.
+var mu sync.Mutex
+
 // Manual triggers a one-off backup into {backupFolder}/manual/.
 func Manual(zomboidFolder, backupFolder string, maxBackups int) {
+	mu.Lock()
+	defer mu.Unlock()
 	run(zomboidFolder, backupFolder, "manual", maxBackups, true)
 }
 
 // Auto triggers a scheduled backup into {backupFolder}/auto/.
 // Silent on success — no notification so it doesn't interrupt the user.
+// Skipped when nothing in Saves changed since the last auto backup, to avoid
+// rewriting identical snapshots (and wearing the disk) while the game is idle.
 func Auto(zomboidFolder, backupFolder string, maxBackups int) {
+	mu.Lock()
+	defer mu.Unlock()
+	savesDir := filepath.Join(zomboidFolder, "Saves")
+	if last, ok := newestSnapshot(filepath.Join(backupFolder, "auto")); ok && !modifiedSince(savesDir, last) {
+		return
+	}
 	run(zomboidFolder, backupFolder, "auto", maxBackups, false)
 }
 
 // Restore unpacks backupPath into zomboidFolder/Saves.
 // If backupFirst is true, the current Saves folder is archived to
-// {backupFolder}/before-restore/ before anything is touched.
+// {backupFolder}/before-restore/ before anything is touched, and the restore
+// is aborted if that safety backup fails.
+// The archive is extracted to a temp dir first, so a broken archive never
+// destroys the current Saves.
 func Restore(backupPath, zomboidFolder, backupFolder string, backupFirst bool) {
+	mu.Lock()
+	defer mu.Unlock()
 	savesDir := filepath.Join(zomboidFolder, "Saves")
 
 	if backupFirst {
 		if _, err := os.Stat(savesDir); err == nil {
 			beforeDir := filepath.Join(backupFolder, "before-restore")
-			if err := os.MkdirAll(beforeDir, 0o755); err == nil {
-				ts := time.Now().Format("2006-01-02_15-04-05")
-				snapPath := filepath.Join(beforeDir, fmt.Sprintf("r-%s.tar.zst", ts))
-				// Best-effort — don't abort the restore if this fails
-				tarZst(savesDir, snapPath) //nolint:errcheck
+			ts := time.Now().Format("2006-01-02_15-04-05")
+			snapPath := filepath.Join(beforeDir, fmt.Sprintf("r-%s.tar.zst", ts))
+			err := os.MkdirAll(beforeDir, 0o755)
+			if err == nil {
+				err = tarZst(savesDir, snapPath)
+			}
+			if err != nil {
+				showDialog(fmt.Sprintf("Safety backup failed, restore aborted:\n%v", err))
+				return
 			}
 		}
 	}
 
-	// Remove existing Saves so the extracted tree replaces it cleanly
-	if err := os.RemoveAll(savesDir); err != nil {
-		showDialog(fmt.Sprintf("Could not remove existing Saves folder:\n%v", err))
+	// Temp dir inside zomboidFolder keeps it on the same volume, so the swap below is a rename.
+	tmpDir, err := os.MkdirTemp(zomboidFolder, ".restore-")
+	if err != nil {
+		showDialog(fmt.Sprintf("Restore failed:\n%v", err))
+		return
+	}
+	defer os.RemoveAll(tmpDir)
+
+	if err := untarZst(backupPath, tmpDir); err != nil {
+		showDialog(fmt.Sprintf("Restore failed:\n%v", err))
+		return
+	}
+	newSaves := filepath.Join(tmpDir, "Saves")
+	if _, err := os.Stat(newSaves); err != nil {
+		showDialog("Restore failed:\nbackup does not contain a Saves folder")
 		return
 	}
 
-	if err := untarZst(backupPath, zomboidFolder); err != nil {
+	// Swap: current Saves goes into tmpDir (deleted on return), extracted Saves takes its place.
+	oldSaves := filepath.Join(tmpDir, "Saves.old")
+	if err := os.Rename(savesDir, oldSaves); err != nil && !os.IsNotExist(err) {
+		showDialog(fmt.Sprintf("Could not replace existing Saves folder:\n%v", err))
+		return
+	}
+	if err := os.Rename(newSaves, savesDir); err != nil {
+		os.Rename(oldSaves, savesDir) //nolint:errcheck // put the original back
 		showDialog(fmt.Sprintf("Restore failed:\n%v", err))
 		return
 	}
@@ -101,7 +145,6 @@ func run(zomboidFolder, backupFolder, subdir string, maxBackups int, notifySucce
 	snapPath := filepath.Join(destDir, snapName)
 
 	if err := tarZst(savesDir, snapPath); err != nil {
-		os.Remove(snapPath)
 		showDialog(fmt.Sprintf("Backup failed:\n%v", err))
 		return
 	}
@@ -182,23 +225,84 @@ func snapshotCreatedAt(name string, fallback time.Time) time.Time {
 	return created
 }
 
+// newestSnapshot returns the creation time of the newest snapshot in dir.
+func newestSnapshot(dir string) (time.Time, bool) {
+	snaps, err := readSnapshotFiles(dir)
+	if err != nil || len(snaps) == 0 {
+		return time.Time{}, false
+	}
+	newest := snaps[0].created
+	for _, s := range snaps[1:] {
+		if s.created.After(newest) {
+			newest = s.created
+		}
+	}
+	return newest, true
+}
+
+// modifiedSince reports whether any file or directory under root changed after t.
+// Directory mtimes also catch deletions. Only metadata is read. Errors count as
+// "changed" so a backup is never skipped by mistake.
+func modifiedSince(root string, t time.Time) bool {
+	changed := errors.New("changed")
+	err := filepath.WalkDir(root, func(_ string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		info, err := d.Info()
+		if err != nil {
+			return err
+		}
+		if info.ModTime().After(t) {
+			return changed
+		}
+		return nil
+	})
+	return err != nil
+}
+
 // tarZst archives sourceDir into a zstd-compressed tar at destPath.
-func tarZst(sourceDir, destPath string) error {
-	f, err := os.Create(destPath)
+// It writes to destPath+".tmp" and renames only after every layer closed
+// cleanly and the data is synced, so a failed or interrupted backup never
+// leaves a truncated snapshot behind (which rotation would treat as valid).
+func tarZst(sourceDir, destPath string) (err error) {
+	tmpPath := destPath + ".tmp"
+	f, err := os.Create(tmpPath)
 	if err != nil {
 		return err
 	}
-	defer f.Close()
+	defer func() {
+		if err != nil {
+			f.Close()
+			os.Remove(tmpPath)
+		}
+	}()
 
 	zw, err := zstd.NewWriter(f, zstd.WithEncoderLevel(zstd.SpeedBestCompression))
 	if err != nil {
 		return err
 	}
-	defer zw.Close()
-
 	tw := tar.NewWriter(zw)
-	defer tw.Close()
 
+	if err = writeTar(tw, sourceDir); err == nil {
+		err = tw.Close() // writes the tar footer
+	}
+	if zerr := zw.Close(); err == nil { // flushes the final zstd frame
+		err = zerr
+	}
+	if err != nil {
+		return err
+	}
+	if err = f.Sync(); err != nil {
+		return err
+	}
+	if err = f.Close(); err != nil {
+		return err
+	}
+	return os.Rename(tmpPath, destPath)
+}
+
+func writeTar(tw *tar.Writer, sourceDir string) error {
 	baseDir := filepath.Dir(sourceDir)
 
 	return filepath.Walk(sourceDir, func(path string, info os.FileInfo, err error) error {
